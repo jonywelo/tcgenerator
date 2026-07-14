@@ -18,62 +18,24 @@ PORT = int(os.environ.get('PORT', 5000))
 class TCExtractor:
     def __init__(self, pdf_bytes):
         self.pdf_bytes = pdf_bytes
-        self.text = ""
 
-    def extract_and_order(self):
-        """Extrae y ordena el texto correctamente usando coordenadas"""
+    def extract_terms(self):
+        """Extrae TERMS & CONDITIONS del PDF"""
         pdf_file = io.BytesIO(self.pdf_bytes)
         
         with pdfplumber.open(pdf_file) as pdf:
-            # Extrae de todas las páginas
-            chars_list = []
-            
-            for page_num, page in enumerate(pdf.pages):
-                # Obtiene todos los caracteres con coordenadas
-                for char in page.chars:
-                    chars_list.append({
-                        'text': char['text'],
-                        'x0': char['x0'],
-                        'top': char['top'],
-                        'page': page_num
-                    })
-            
-            # Ordena por: página, top (arriba-abajo), x0 (izquierda-derecha)
-            chars_list.sort(key=lambda c: (c['page'], round(c['top'] / 10) * 10, c['x0']))
-            
-            # Reconstruye el texto
-            current_line = ""
-            current_top = None
-            lines = []
-            
-            for char in chars_list:
-                # Si cambió la línea (top cambió significativamente), guarda la línea
-                if current_top is not None and abs(char['top'] - current_top) > 5:
-                    if current_line.strip():
-                        lines.append(current_line.strip())
-                    current_line = char['text']
-                    current_top = char['top']
-                else:
-                    current_line += char['text']
-                    if current_top is None:
-                        current_top = char['top']
-            
-            if current_line.strip():
-                lines.append(current_line.strip())
-            
-            self.text = '\n'.join(lines)
+            full_text = ""
+            for page in pdf.pages:
+                full_text += (page.extract_text() or "") + "\n"
         
-        return self.text
-
-    def extract_terms(self):
-        """Extrae solo TERMS & CONDITIONS"""
-        if "TERMS & CONDITIONS" not in self.text:
-            raise Exception("No TERMS & CONDITIONS found")
+        if "TERMS & CONDITIONS" not in full_text:
+            raise Exception("No TERMS & CONDITIONS found in PDF")
         
-        start = self.text.find("TERMS & CONDITIONS")
-        extracted = self.text[start:]
+        # Extrae desde TERMS & CONDITIONS
+        start = full_text.find("TERMS & CONDITIONS")
+        extracted = full_text[start:]
         
-        # Busca el final (antes de "By signing" o firma)
+        # Busca el final
         end_markers = ["By signing this contract", "Both parties agree", "Date, Signature"]
         for marker in end_markers:
             if marker in extracted:
@@ -83,37 +45,49 @@ class TCExtractor:
         
         return extracted.strip()
 
-    def transform_terms(self, entity):
-        """Aplica transformaciones de Welojets"""
-        text = self.extract_terms()
+    def clean_and_fix(self, text, entity):
+        """Limpia el texto y aplica transformaciones"""
         
-        # Limpia info del operador
-        text = re.sub(r'(Industriestraße|Geschäftsführer|Deutsche Bank|IBAN|BIC|SWIFT|HRB|Amtsgericht).*', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'VAT:?\s*DE\s*\d+\s*\d+\s*\d+', '', text)
-        text = re.sub(r'sales@\S+\.\w+', '', text)
-        text = re.sub(r'www\.\S+', '', text)
+        # 1. Elimina líneas completas con info del operador
+        lines = text.split('\n')
+        cleaned = []
         
-        # Duplica cancelaciones pero MÁXIMO 100%
+        skip_keywords = ['Industriestraße', 'Geschäftsführer', 'Deutsche Bank', 'IBAN', 'BIC', 
+                        'SWIFT', 'HRB', 'Amtsgericht', 'Josephine', 'Marko', 'Schkeuditz',
+                        'VAT:', 'sales@', 'www.', 'Charter Agreement', 'Thank you', 'Aircraft:',
+                        'Prepared for:', 'Contact Person:', 'Date ETD', 'Price', 'Total Price']
+        
+        for line in lines:
+            if any(kw in line for kw in skip_keywords):
+                continue
+            if len(line.strip()) < 2:
+                continue
+            cleaned.append(line)
+        
+        text = '\n'.join(cleaned)
+        
+        # 2. Limpia URLs
+        text = re.sub(r'https?://\S+', '', text)
+        
+        # 3. Limpia emails no-Welojets
+        text = re.sub(r'[a-zA-Z0-9._%+-]+@(?!welojets)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
+        
+        # 4. Cancellation fees - MÁXIMO 100%
         def fix_cancel(m):
-            pct_str = m.group(1)
-            try:
-                pct = int(pct_str)
-                new_pct = pct * 2
-                # MÁXIMO 100%
-                return f"{min(new_pct, 100)}%"
-            except:
-                return m.group(0)
+            pct = int(m.group(1))
+            new_pct = min(pct * 2, 100)  # MÁXIMO 100%
+            return f"{new_pct}%"
         
         text = re.sub(r'(\d+)%\s+(?:of|after|if|for)', fix_cancel, text, flags=re.IGNORECASE)
         
-        # Credit card fee
+        # 5. Credit card fee
         text = re.sub(r'credit\s+card\s+fee[:\s]+\d+%', 'credit card fee: 5%', text, flags=re.IGNORECASE)
         
-        # Governing Law
+        # 6. Governing Law
         repl = 'Madrid, Spain' if entity == 'SL' else 'Florida, USA'
         text = re.sub(r'(?:governing|applicable)\s+law[:\s]*[^\n.]*', f'Governing Law: {repl}', text, flags=re.IGNORECASE)
         
-        # Limpia espacios
+        # 7. Limpia espacios múltiples
         text = re.sub(r'\n\s*\n+', '\n\n', text)
         text = re.sub(r' {2,}', ' ', text)
         
@@ -145,7 +119,6 @@ class TCGenerator:
         story.append(Paragraph(notice_txt, notice_style))
         story.append(Spacer(1, 0.3*inch))
 
-        # TÉRMINOS EXTRAÍDOS
         for line in self.terms_text.split('\n'):
             line = line.strip()
             if not line:
@@ -186,7 +159,7 @@ class TCGenerator:
             except:
                 pass
 
-HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T&C Generator</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.container{background:white;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.3);padding:40px;max-width:500px;width:100%}h1{color:#333;font-size:28px;text-align:center}label{display:block;color:#333;font-weight:600;margin:20px 0 10px}.upload-area{border:2px dashed #667eea;border-radius:8px;padding:30px;text-align:center;cursor:pointer;background:#f8f9ff}.upload-area:hover{border-color:#764ba2}#pdf-input{display:none}.file-name{color:#10b981;margin-top:8px;font-size:13px}.entity-group{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}.radio-option input{display:none}.radio-label{display:block;padding:12px;border:2px solid #e0e0e0;border-radius:6px;cursor:pointer;font-weight:500}.radio-option input:checked+.radio-label{border-color:#667eea;background:#f0f2ff;color:#667eea}button{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;margin-top:20px}.error{background:#fee;border-left:4px solid #f00;color:#c33;padding:12px;margin-top:12px;display:none}.error.show{display:block}</style></head><body><div class="container"><h1>T&C Generator</h1><form id="f" enctype="multipart/form-data"><label>Carga PDF</label><div class="upload-area" id="ua"><div style="font-size:32px">📄</div><div>Arrastra aquí</div></div><input type="file" id="pi" accept=".pdf" required><div class="file-name" id="fn"></div><label>Entidad</label><div class="entity-group"><div class="radio-option"><input type="radio" id="es" name="e" value="SL" checked><label for="es" class="radio-label">SL - Madrid</label></div><div class="radio-option"><input type="radio" id="el" name="e" value="LLC"><label for="el" class="radio-label">LLC - Florida</label></div></div><div class="error" id="em"></div><button type="submit">Generar PDF</button></form></div><script>const f=document.getElementById('f');const ua=document.getElementById('ua');const pi=document.getElementById('pi');const em=document.getElementById('em');ua.addEventListener('click',()=>pi.click());ua.addEventListener('drop',(e)=>{e.preventDefault();pi.files=e.dataTransfer.files;});pi.addEventListener('change',()=>{if(pi.files[0])document.getElementById('fn').textContent='✓ '+pi.files[0].name;});f.addEventListener('submit',async(e)=>{e.preventDefault();if(!pi.files[0]){em.textContent='❌ Selecciona un PDF';em.classList.add('show');return;}const d=new FormData();d.append('pdf',pi.files[0]);d.append('entity',document.querySelector('input[name="e"]:checked').value);try{const r=await fetch('/api/generate',{method:'POST',body:d});if(!r.ok)throw new Error('Error');const b=await r.blob();const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`TC_${new Date().toISOString().slice(0,10)}.pdf`;a.click();}catch(e){em.textContent='❌ '+e.message;em.classList.add('show');}});</script></body></html>"""
+HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T&C Generator</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.container{background:white;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.3);padding:40px;max-width:500px;width:100%}h1{color:#333;font-size:28px;text-align:center}label{display:block;color:#333;font-weight:600;margin:20px 0 10px}.upload-area{border:2px dashed #667eea;border-radius:8px;padding:30px;text-align:center;cursor:pointer;background:#f8f9ff}.upload-area:hover{border-color:#764ba2}#pdf-input{display:none}.file-name{color:#10b981;margin-top:8px;font-size:13px}.entity-group{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}.radio-option input{display:none}.radio-label{display:block;padding:12px;border:2px solid #e0e0e0;border-radius:6px;cursor:pointer;font-weight:500}.radio-option input:checked+.radio-label{border-color:#667eea;background:#f0f2ff;color:#667eea}button{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;margin-top:20px}.error{background:#fee;border-left:4px solid #f00;color:#c33;padding:12px;margin-top:12px;display:none}.error.show{display:block}</style></head><body><div class="container"><h1>T&C Generator</h1><form id="f" enctype="multipart/form-data"><label>Carga PDF</label><div class="upload-area" id="ua"><div style="font-size:32px">📄</div><div>Arrastra aquí</div></div><input type="file" id="pi" accept=".pdf" required><div class="file-name" id="fn"></div><label>Entidad</label><div class="entity-group"><div class="radio-option"><input type="radio" id="es" name="e" value="SL" checked><label for="es" class="radio-label">SL - Madrid</label></div><div class="radio-option"><input type="radio" id="el" name="e" value="LLC"><label for="el" class="radio-label">LLC - Florida</label></div></div><div class="error" id="em"></div><button type="submit">Generar PDF</button></form></div><script>const f=document.getElementById('f');const ua=document.getElementById('ua');const pi=document.getElementById('pi');const em=document.getElementById('em');ua.addEventListener('click',()=>pi.click());ua.addEventListener('drop',(e)=>{e.preventDefault();pi.files=e.dataTransfer.files;});pi.addEventListener('change',()=>{if(pi.files[0])document.getElementById('fn').textContent='✓ '+pi.files[0].name;});f.addEventListener('submit',async(e)=>{e.preventDefault();if(!pi.files[0]){em.textContent='❌ Selecciona un PDF';em.classList.add('show');return;}const d=new FormData();d.append('pdf',pi.files[0]);d.append('entity',document.querySelector('input[name="e"]:checked').value);try{const r=await fetch('/api/generate',{method:'POST',body:d});if(!r.ok){const err=await r.json();throw new Error(err.error||'Error')}const b=await r.blob();const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`TC_${new Date().toISOString().slice(0,10)}.pdf`;a.click();}catch(e){em.textContent='❌ '+e.message;em.classList.add('show');}});</script></body></html>"""
 
 @app.route('/')
 def index():
@@ -196,22 +169,26 @@ def index():
 def generate():
     try:
         if 'pdf' not in request.files:
-            return jsonify({'error': 'No PDF'}), 400
+            return jsonify({'error': 'No PDF file provided'}), 400
+        
         pdf_file = request.files['pdf']
         entity = request.form.get('entity', 'SL')
         pdf_bytes = pdf_file.read()
         
-        # Extrae y ordena
+        # Extrae términos
         extractor = TCExtractor(pdf_bytes)
-        extractor.extract_and_order()
-        terms = extractor.transform_terms(entity)
+        raw_terms = extractor.extract_terms()
+        
+        # Limpia y transforma
+        clean_terms = extractor.clean_and_fix(raw_terms, entity)
         
         # Genera PDF
-        generator = TCGenerator(terms, entity)
+        generator = TCGenerator(clean_terms, entity)
         pdf_buffer = generator.generate_pdf()
         
         return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True,
                         download_name=f'TC_Modified_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
+    
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
