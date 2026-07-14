@@ -1,5 +1,6 @@
 import os
 import io
+import base64
 from flask import Flask, request, send_file, jsonify
 import pdfplumber
 import re
@@ -10,14 +11,60 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Page
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_JUSTIFY
 from datetime import datetime
+from io import BytesIO
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 PORT = int(os.environ.get('PORT', 5000))
 
+# Logo Welojets en BASE64 (así no depende de archivos)
+LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
 class TCExtractor:
     def __init__(self, pdf_bytes):
         self.pdf_bytes = pdf_bytes
+
+    def is_operator_data_line(self, line):
+        """Detecta si una línea es dato del operador (genérico para cualquier operador)"""
+        line_lower = line.lower().strip()
+        
+        if not line_lower or len(line_lower) < 3:
+            return False
+        
+        # Patrón 1: Líneas que son SOLO datos estructurados
+        # "Campo: valor" donde campo es registro/banco/contacto
+        if re.match(r'^(IBAN|BIC|SWIFT|VAT|TAX|Registration|Company|Director|Manager|Address|Phone|Email|Web|Fax|Tel|Mobile):\s*', line, re.IGNORECASE):
+            return True
+        
+        # Patrón 2: Líneas que contienen IBAN/BIC/VAT completos
+        if re.search(r'[A-Z]{2}\d{2}[A-Z0-9]{1,30}', line):  # IBAN pattern
+            return True
+        if re.search(r'[A-Z]{6}[A-Z0-9]{2}[A-Z0-9]{3}', line):  # BIC pattern
+            return True
+        
+        # Patrón 3: Líneas que son SOLO email o teléfono
+        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', line):
+            return True
+        if re.match(r'^(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', line):
+            return True
+        
+        # Patrón 4: Líneas que son SOLO direcciones (tienen números de calle, códigos postales)
+        if re.search(r'\b\d{5,6}\b', line) and len(line) < 80:  # Código postal
+            return True
+        if re.search(r'^[\w\s]+\s+(\d+[a-z]?),?\s+\d{4,5}', line, re.IGNORECASE):  # Dirección
+            return True
+        
+        # Patrón 5: Líneas muy cortas que parecen valores (una o dos palabras)
+        word_count = len(line_lower.split())
+        if word_count <= 2 and re.search(r'\d', line):  # Pocas palabras + números
+            return True
+        
+        # Patrón 6: Líneas que contienen palabras típicas de empresa
+        company_keywords = ['gmbh', 'ltd', 'inc', 'corp', 'llc', 'sarl', 'sprl', 'pty', 'ag', 'sa', 'bv']
+        if any(kw in line_lower for kw in company_keywords) and len(line) < 100:
+            return True
+        
+        return False
 
     def extract_terms(self):
         """Extrae términos con búsqueda flexible"""
@@ -28,7 +75,6 @@ class TCExtractor:
             for page in pdf.pages:
                 full_text += (page.extract_text() or "") + "\n"
         
-        # Busca múltiples patrones FLEXIBLES
         patterns = [
             r'The\s+Terms?\s+(?:and|&)\s+Conditions?',
             r'TERMS?\s*(?:and|&)\s*CONDITIONS?',
@@ -48,11 +94,10 @@ class TCExtractor:
                 break
         
         if start_pos is None:
-            raise Exception("Cannot find T&C section. Please ensure the PDF contains a terms section.")
+            raise Exception("Cannot find T&C section")
         
         extracted = full_text[start_pos:]
         
-        # Busca el final (antes de firma)
         end_markers = [
             r'By\s+signing\s+this',
             r'Date[,:]?\s+Signature',
@@ -69,59 +114,44 @@ class TCExtractor:
         return extracted.strip()
 
     def clean_and_fix(self, text, entity):
-        """Limpia GENÉRICAMENTE - funciona para cualquier operador"""
+        """Limpia GENÉRICAMENTE - cualquier operador"""
         
+        # 1. Elimina líneas que son datos del operador
         lines = text.split('\n')
-        cleaned = []
-        
-        for line in lines:
-            line_lower = line.lower()
-            
-            # Elimina líneas que son SOLO info de banco/registro
-            if any(x in line_lower for x in ['iban:', 'bic:', 'swift:', 'hrb', 'amtsgericht', 
-                                               'geschäftsführer', 'industriestraße', 'schkeuditz',
-                                               'vat:', 'tax id:', 'registration', 'company registration']):
-                continue
-            
-            # Elimina líneas de campos de forma
-            if re.match(r'^(Company|Prepared\s+for|Contact\s+Person|Aircraft|Date\s+ETD|Price|Total\s+Price):', line):
-                continue
-            
-            # Elimina líneas de solo contacto
-            if re.match(r'^(Phone|E-Mail|Email|Web|Fax|Tel):\s*$', line):
-                continue
-            
-            cleaned.append(line)
-        
+        cleaned = [line for line in lines if not self.is_operator_data_line(line)]
         text = '\n'.join(cleaned)
         
-        # Elimina emails no-Welojets
+        # 2. Elimina emails no-Welojets INLINE
         text = re.sub(r'[a-zA-Z0-9._%+-]+@(?!welojets)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
         
-        # Elimina URLs
+        # 3. Elimina URLs
         text = re.sub(r'https?://\S+', '', text)
         text = re.sub(r'www\.\S+', '', text)
         
-        # Elimina números de banco
-        text = re.sub(r'VAT[:\s]*[A-Z]{2}\s*\d+[\s\d]*', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'(IBAN|BIC|SWIFT)[:\s]*[A-Z0-9]+', '', text, flags=re.IGNORECASE)
+        # 4. Elimina IBAN/BIC/SWIFT/VAT inline
+        text = re.sub(r'IBAN:\s*[A-Z0-9\s]+', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'BIC:\s*[A-Z0-9]+', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'SWIFT:\s*[A-Z0-9]+', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'VAT:\s*[A-Z0-9\s]+', '', text, flags=re.IGNORECASE)
         
-        # Cancellation fees - MÁXIMO 100%
+        # 5. GOVERNING LAW - reemplaza SOLO el país/ley, no el párrafo
+        repl_country = 'Madrid, Spain' if entity == 'SL' else 'Florida, USA'
+        
+        # Busca patrones genéricos: "governed by [País]", "[País] Law", "laws of [País]"
+        text = re.sub(r'governed\s+by\s+\w+(?:\s+\w+)?(?:\s+law)?', f'governed by {repl_country}', text, flags=re.IGNORECASE)
+        text = re.sub(r'\b\w+(?:\s+\w+)?\s+law(?:s)?(?:\s+(?:of|in)\s+\w+)?', f'{repl_country} law', text, flags=re.IGNORECASE)
+        text = re.sub(r'laws?\s+(?:of|in)\s+\w+(?:\s+\w+)?', f'laws of {repl_country}', text, flags=re.IGNORECASE)
+        
+        # 6. Cancellation fees - MÁXIMO 100%
         def fix_cancel(m):
             pct = int(m.group(1))
-            new_pct = min(pct * 2, 100)
-            return f"{new_pct}%"
-        
+            return f"{min(pct * 2, 100)}%"
         text = re.sub(r'(\d+)%\s+(?:of|after|if|for)', fix_cancel, text, flags=re.IGNORECASE)
         
-        # Credit card fee
+        # 7. Credit card fee
         text = re.sub(r'credit\s+card\s+fee[:\s]+\d+%', 'credit card fee: 5%', text, flags=re.IGNORECASE)
         
-        # Governing Law
-        repl = 'Madrid, Spain' if entity == 'SL' else 'Florida, USA'
-        text = re.sub(r'(?:governing|applicable)\s+law[:\s]*[^\n.]*', f'Governing Law: {repl}', text, flags=re.IGNORECASE)
-        
-        # Limpia espacios
+        # 8. Limpia espacios
         text = re.sub(r'\n\s*\n+', '\n\n', text)
         text = re.sub(r' {2,}', ' ', text)
         
@@ -176,22 +206,15 @@ class TCGenerator:
         return buffer
 
     def _add_header(self, canvas, doc):
-        logo_paths = [
-            'static/logo_welojets.png',
-            os.path.join(os.path.dirname(__file__), 'static', 'logo_welojets.png'),
-            '/app/static/logo_welojets.png',
-            '/opt/render/project/src/static/logo_welojets.png',
-        ]
-        for logo_path in logo_paths:
-            try:
-                if os.path.exists(logo_path):
-                    img = Image(logo_path, width=1.2*inch, height=1.2*inch)
-                    x = (letter[0] - 1.2*inch) / 2
-                    y = letter[1] - 0.95*inch
-                    img.drawOn(canvas, x, y)
-                    break
-            except:
-                pass
+        try:
+            # Usa logo en BASE64
+            logo_bytes = base64.b64decode(LOGO_BASE64)
+            img = Image(BytesIO(logo_bytes), width=1.2*inch, height=1.2*inch)
+            x = (letter[0] - 1.2*inch) / 2
+            y = letter[1] - 0.95*inch
+            img.drawOn(canvas, x, y)
+        except:
+            pass
 
 HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T&C Generator</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.container{background:white;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.3);padding:40px;max-width:500px;width:100%}h1{color:#333;font-size:28px;text-align:center}label{display:block;color:#333;font-weight:600;margin:20px 0 10px}.upload-area{border:2px dashed #667eea;border-radius:8px;padding:30px;text-align:center;cursor:pointer;background:#f8f9ff}.upload-area:hover{border-color:#764ba2}#pdf-input{display:none}.file-name{color:#10b981;margin-top:8px;font-size:13px}.entity-group{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}.radio-option input{display:none}.radio-label{display:block;padding:12px;border:2px solid #e0e0e0;border-radius:6px;cursor:pointer;font-weight:500}.radio-option input:checked+.radio-label{border-color:#667eea;background:#f0f2ff;color:#667eea}button{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;margin-top:20px}.error{background:#fee;border-left:4px solid #f00;color:#c33;padding:12px;margin-top:12px;display:none}.error.show{display:block}</style></head><body><div class="container"><h1>T&C Generator</h1><form id="f" enctype="multipart/form-data"><label>Carga PDF</label><div class="upload-area" id="ua"><div style="font-size:32px">📄</div><div>Arrastra aquí</div></div><input type="file" id="pi" accept=".pdf" required><div class="file-name" id="fn"></div><label>Entidad</label><div class="entity-group"><div class="radio-option"><input type="radio" id="es" name="e" value="SL" checked><label for="es" class="radio-label">SL - Madrid</label></div><div class="radio-option"><input type="radio" id="el" name="e" value="LLC"><label for="el" class="radio-label">LLC - Florida</label></div></div><div class="error" id="em"></div><button type="submit">Generar PDF</button></form></div><script>const f=document.getElementById('f');const ua=document.getElementById('ua');const pi=document.getElementById('pi');const em=document.getElementById('em');ua.addEventListener('click',()=>pi.click());ua.addEventListener('drop',(e)=>{e.preventDefault();pi.files=e.dataTransfer.files;});pi.addEventListener('change',()=>{if(pi.files[0])document.getElementById('fn').textContent='✓ '+pi.files[0].name;});f.addEventListener('submit',async(e)=>{e.preventDefault();if(!pi.files[0]){em.textContent='❌ Selecciona un PDF';em.classList.add('show');return;}const d=new FormData();d.append('pdf',pi.files[0]);d.append('entity',document.querySelector('input[name="e"]:checked').value);try{const r=await fetch('/api/generate',{method:'POST',body:d});if(!r.ok){const err=await r.json();throw new Error(err.error||'Error')}const b=await r.blob();const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`TC_${new Date().toISOString().slice(0,10)}.pdf`;a.click();}catch(e){em.textContent='❌ '+e.message;em.classList.add('show');}});</script></body></html>"""
 
