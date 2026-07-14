@@ -1,249 +1,396 @@
+"""
+T&C Generator - Flask Application v2
+Procesador de Términos y Condiciones para contratos de operadores de aviación
+"""
+
 import os
 import io
 import base64
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify
 import pdfplumber
 import re
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_JUSTIFY
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+from langdetect import detect
 from datetime import datetime
-from io import BytesIO
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-PORT = int(os.environ.get('PORT', 5000))
 
-# Logo Welojets en BASE64 (así no depende de archivos)
-LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+# Logo Welojets embebido como base64
+LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAARAAAABhCAYAAAAeA/7FAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAABckSURBVHhe7d15VFTn+Qfw7zAwIPu+jrIMIouKC7KYxKNgkxSpbdpGSdxQ1CxNpTVibINKXFpNVZqQNPWkPdU0CiektvFU2tIj1miIAaMIguwGMGwi2wiyzvv7o3AP9x2QmQvK0N/zOec9h/u+z70XBnjmfd/7zr0yxhgDIYRIYMRXEEKIriiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIowX+kq9E0wFZiZAAAAABJRU5ErkJggg=="
 
-class TCExtractor:
-    def __init__(self, pdf_bytes):
-        self.pdf_bytes = pdf_bytes
+def load_logo():
+    """Intenta cargar logo desde archivo como fallback"""
+    global LOGO_BASE64
+    logo_path = os.path.join(os.path.dirname(__file__), 'logo_welojets.png')
+    if os.path.exists(logo_path) and not LOGO_BASE64:
+        try:
+            with open(logo_path, 'rb') as f:
+                LOGO_BASE64 = base64.b64encode(f.read()).decode('utf-8')
+        except:
+            pass
+
+load_logo()
+
+class TCProcessor:
+    """Procesador de Términos y Condiciones"""
+
+    def __init__(self):
+        self.lang = 'en'
+
+    def detect_language(self, text):
+        """Detecta idioma del texto"""
+        try:
+            self.lang = detect(text[:500])
+            if self.lang not in ['en', 'es']:
+                self.lang = 'en'
+        except:
+            self.lang = 'en'
+        return self.lang
+
+    def extract_tc_from_pdf(self, pdf_bytes):
+        """Extrae Terms and Conditions del PDF"""
+        try:
+            pdf_file = io.BytesIO(pdf_bytes)
+            text_content = ""
+
+            with pdfplumber.open(pdf_file) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    page_text = page.extract_text() or ""
+                    text_content += page_text + "\n"
+
+            # Busca el inicio de T&C con patrones más flexibles
+            patterns = [
+                r'(?:terms?\s+and\s+conditions?|t\s*&\s*c)',
+                r'(?:términos?\s+y\s+condiciones?)',
+                r'(?:terms?|conditions?|términos?|condiciones?)',
+            ]
+
+            tc_start_idx = -1
+            for pattern in patterns:
+                match = re.search(pattern, text_content, re.IGNORECASE)
+                if match:
+                    tc_start_idx = match.start()
+                    break
+
+            if tc_start_idx > 0:
+                text_content = text_content[tc_start_idx:]
+
+            return text_content
+        except Exception as e:
+            raise Exception(f"Error extrayendo PDF: {str(e)}")
 
     def is_operator_data_line(self, line):
-        """Detecta si una línea es dato del operador (genérico para cualquier operador)"""
-        line_lower = line.lower().strip()
-        
-        if not line_lower or len(line_lower) < 3:
+        """Detecta si una línea contiene datos del operador"""
+        if not line.strip():
             return False
-        
-        # Patrón 1: Líneas que son SOLO datos estructurados
-        # "Campo: valor" donde campo es registro/banco/contacto
-        if re.match(r'^(IBAN|BIC|SWIFT|VAT|TAX|Registration|Company|Director|Manager|Address|Phone|Email|Web|Fax|Tel|Mobile):\s*', line, re.IGNORECASE):
-            return True
-        
-        # Patrón 2: Líneas que contienen IBAN/BIC/VAT completos
-        if re.search(r'[A-Z]{2}\d{2}[A-Z0-9]{1,30}', line):  # IBAN pattern
-            return True
-        if re.search(r'[A-Z]{6}[A-Z0-9]{2}[A-Z0-9]{3}', line):  # BIC pattern
-            return True
-        
-        # Patrón 3: Líneas que son SOLO email o teléfono
-        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', line):
-            return True
-        if re.match(r'^(\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}', line):
-            return True
-        
-        # Patrón 4: Líneas que son SOLO direcciones (tienen números de calle, códigos postales)
-        if re.search(r'\b\d{5,6}\b', line) and len(line) < 80:  # Código postal
-            return True
-        if re.search(r'^[\w\s]+\s+(\d+[a-z]?),?\s+\d{4,5}', line, re.IGNORECASE):  # Dirección
-            return True
-        
-        # Patrón 5: Líneas muy cortas que parecen valores (una o dos palabras)
-        word_count = len(line_lower.split())
-        if word_count <= 2 and re.search(r'\d', line):  # Pocas palabras + números
-            return True
-        
-        # Patrón 6: Líneas que contienen palabras típicas de empresa
-        company_keywords = ['gmbh', 'ltd', 'inc', 'corp', 'llc', 'sarl', 'sprl', 'pty', 'ag', 'sa', 'bv']
-        if any(kw in line_lower for kw in company_keywords) and len(line) < 100:
-            return True
-        
+
+        line_lower = line.lower()
+
+        # Patrones de datos del operador a eliminar
+        operator_markers = [
+            # Direcciones y ubicaciones geográficas
+            r'\b\d+\s+(?:ammar|street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|circle|cir)\b',
+            r'\b(?:cairo|egypt|heliopolis|giza)\b',
+            r'\b(?:p\.o\.\s+box|po box|postal code|zip code)\b',
+
+            # Información bancaria
+            r'\b(?:account|bank|iban|bic|swift|routing)\b',
+            r'\b\d{10,20}\b',  # Números de cuenta (típicamente 10-20 dígitos)
+            r'\b[a-z]{2}\d{2}[a-z0-9]{1,30}\b',  # IBAN format
+            r'\b[a-z]{6}[a-z0-9]{2}[a-z0-9]{3}\b',  # BIC format
+            r'usd|eur|currency',
+
+            # Información de registro/licencia
+            r'\blicense\s+number\b',
+            r'\blimited\s+liability\b',
+            r'\bregistered\b',
+
+            # Nombres de operadores comunes
+            r'\b(?:mayfair|netjets|vistajet|air\s+charter|charter\s+air|airways|aviation|executive)\b',
+
+            # Emails y teléfonos
+            r'\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b',
+            r'\+\d{1,3}\s?[\d\s\-\(\)]{7,}',
+            r'\(\d{3}\)\s?\d{3}-\d{4}',
+            r'\boffice\s*:\s*\d+',
+        ]
+
+        for marker in operator_markers:
+            if re.search(marker, line_lower):
+                return True
+
         return False
 
-    def extract_terms(self):
-        """Extrae términos con búsqueda flexible"""
-        pdf_file = io.BytesIO(self.pdf_bytes)
-        
-        with pdfplumber.open(pdf_file) as pdf:
-            full_text = ""
-            for page in pdf.pages:
-                full_text += (page.extract_text() or "") + "\n"
-        
-        patterns = [
-            r'The\s+Terms?\s+(?:and|&)\s+Conditions?',
-            r'TERMS?\s*(?:and|&)\s*CONDITIONS?',
-            r'^\s*TERMS?\s*$',
-            r'GENERAL\s+CONDITIONS?',
-            r'CONDITIONS?\s+OF\s+CONTRACT',
-            r'CONTRACT\s+TERMS?',
-            r'Included\s+Services',
-            r'Booking:?',
-        ]
-        
-        start_pos = None
-        for pattern in patterns:
-            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
-            if match:
-                start_pos = match.start()
-                break
-        
-        if start_pos is None:
-            raise Exception("Cannot find T&C section")
-        
-        extracted = full_text[start_pos:]
-        
-        end_markers = [
-            r'By\s+signing\s+this',
-            r'Date[,:]?\s+Signature',
-            r'Both\s+parties\s+agree',
-            r'SIGNATURE',
-        ]
-        
-        for marker in end_markers:
-            match = re.search(marker, extracted, re.IGNORECASE)
-            if match:
-                extracted = extracted[:match.start()]
-                break
-        
-        return extracted.strip()
+    def transform_text(self, text, entity):
+        """Aplica todas las transformaciones según reglas de Welojets"""
+        self.detect_language(text)
 
-    def clean_and_fix(self, text, entity):
-        """Limpia GENÉRICAMENTE - cualquier operador"""
-        
-        # 1. Elimina líneas que son datos del operador
+        # Limpia líneas que contienen información del operador
         lines = text.split('\n')
-        cleaned = [line for line in lines if not self.is_operator_data_line(line)]
-        text = '\n'.join(cleaned)
-        
-        # 2. Elimina emails no-Welojets INLINE
-        text = re.sub(r'[a-zA-Z0-9._%+-]+@(?!welojets)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
-        
-        # 3. Elimina URLs
-        text = re.sub(r'https?://\S+', '', text)
-        text = re.sub(r'www\.\S+', '', text)
-        
-        # 4. Elimina IBAN/BIC/SWIFT/VAT inline
-        text = re.sub(r'IBAN:\s*[A-Z0-9\s]+', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'BIC:\s*[A-Z0-9]+', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'SWIFT:\s*[A-Z0-9]+', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'VAT:\s*[A-Z0-9\s]+', '', text, flags=re.IGNORECASE)
-        
-        # 5. GOVERNING LAW - reemplaza SOLO el país/ley, no el párrafo
-        repl_country = 'Madrid, Spain' if entity == 'SL' else 'Florida, USA'
-        
-        # Busca patrones genéricos: "governed by [País]", "[País] Law", "laws of [País]"
-        text = re.sub(r'governed\s+by\s+\w+(?:\s+\w+)?(?:\s+law)?', f'governed by {repl_country}', text, flags=re.IGNORECASE)
-        text = re.sub(r'\b\w+(?:\s+\w+)?\s+law(?:s)?(?:\s+(?:of|in)\s+\w+)?', f'{repl_country} law', text, flags=re.IGNORECASE)
-        text = re.sub(r'laws?\s+(?:of|in)\s+\w+(?:\s+\w+)?', f'laws of {repl_country}', text, flags=re.IGNORECASE)
-        
-        # 6. Cancellation fees - MÁXIMO 100%
-        def fix_cancel(m):
-            pct = int(m.group(1))
-            return f"{min(pct * 2, 100)}%"
-        text = re.sub(r'(\d+)%\s+(?:of|after|if|for)', fix_cancel, text, flags=re.IGNORECASE)
-        
-        # 7. Credit card fee
-        text = re.sub(r'credit\s+card\s+fee[:\s]+\d+%', 'credit card fee: 5%', text, flags=re.IGNORECASE)
-        
-        # 8. Limpia espacios
-        text = re.sub(r'\n\s*\n+', '\n\n', text)
-        text = re.sub(r' {2,}', ' ', text)
-        
-        return text.strip()
+        cleaned_lines = []
+        for line in lines:
+            if not self.is_operator_data_line(line):
+                cleaned_lines.append(line)
+        text = '\n'.join(cleaned_lines)
 
-class TCGenerator:
-    def __init__(self, terms_text, entity):
-        self.terms_text = terms_text
-        self.entity = entity
+        # Reemplaza nombres de operadores genéricamente
+        operator_patterns = [
+            (r'\bthe\s+carrier\b', 'The Operator'),
+            (r'\bthe\s+charterer\b', 'The Customer'),
+            (r'\bmayfair\s+jets\s+egypt\b', 'The Operator'),
+        ]
 
-    def generate_pdf(self):
+        for pattern, replacement in operator_patterns:
+            if self.lang == 'es':
+                if 'operator' in replacement.lower():
+                    replacement = 'El Operador'
+                elif 'customer' in replacement.lower():
+                    replacement = 'El Cliente'
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+        text = self._transform_cancellations(text)
+        text = self._transform_payments(text, entity)
+        text = self._transform_governing_law(text, entity)
+
+        return text
+
+    def _transform_cancellations(self, text):
+        """Transforma políticas de cancelación - máximo 100%"""
+        def replace_percentage(match):
+            percentage_str = match.group(1)
+            try:
+                percentage = int(percentage_str)
+            except:
+                return match.group(0)
+
+            # Regla: si es 0% -> 15%, si es >=50% -> 100%, si es <50% -> duplica pero máximo 100%
+            if percentage == 0:
+                return "15%"
+            elif percentage >= 50:
+                return "100%"
+            else:
+                new_pct = min(percentage * 2, 100)
+                return f"{new_pct}%"
+
+        patterns = [
+            (r'(\d+)%\s+(?:non-refundable|of\s+)?(?:cancellation|refund)', r'\1% cancellation'),
+            (r'cancellation\s+(?:fee|charge):\s*(\d+)%', r'cancellation fee: \1%'),
+            (r'(?:cancelación|reembolso):\s*(\d+)%', r'\1%'),
+        ]
+
+        for pattern, _ in patterns:
+            text = re.sub(pattern, replace_percentage, text, flags=re.IGNORECASE)
+
+        return text
+
+    def _transform_payments(self, text, entity):
+        """Transforma sección de Payments - credit card fee siempre 5%"""
+        # Credit card fee a 5%
+        text = re.sub(r'credit\s+card\s+fee:?\s+\d+%', 'credit card fee: 5%', text, flags=re.IGNORECASE)
+        text = re.sub(r'comisión\s+(?:de\s+)?tarjeta:?\s+\d+%', 'comisión de tarjeta: 5%', text, flags=re.IGNORECASE)
+
+        return text
+
+    def _transform_governing_law(self, text, entity):
+        """Reemplaza Governing Law manteniendo estructura original"""
+        if entity == 'SL':
+            replacement = 'Madrid, Spain'
+        elif entity == 'LLC':
+            replacement = 'Florida, USA'
+        else:
+            return text
+
+        # Patrones que capturan "governed by [COUNTRY/LAW]" y reemplazan solo la jurisdicción
+        patterns = [
+            (r'(governed\s+by\s+)[A-Za-z\s,]+(?:law|laws|jurisdiction)', r'\1' + replacement),
+            (r'(shall\s+be\s+governed\s+by\s+)[A-Za-z\s,]+(?:law|laws)', r'\1' + replacement),
+            (r'(applicable\s+law:\s*)[A-Za-z\s,]+', r'\1' + replacement),
+            (r'(jurisdiction:\s*)[A-Za-z\s,]+(?:law)?', r'\1' + replacement),
+        ]
+
+        for pattern, repl in patterns:
+            text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+
+        return text
+
+    def generate_pdf(self, text, entity):
+        """Genera PDF final con formato Welojets"""
         buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=1.2*inch, bottomMargin=0.5*inch)
+        doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=1.35*inch)
+
         styles = getSampleStyleSheet()
 
-        notice_style = ParagraphStyle('Notice', parent=styles['Normal'], fontName='Helvetica-Bold',
-                                     textColor=colors.red, fontSize=10, leading=13,
-                                     alignment=TA_JUSTIFY, spaceAfter=18)
-        normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName='Helvetica',
-                                     fontSize=9, leading=11, alignment=TA_JUSTIFY, spaceAfter=9)
-        heading_style = ParagraphStyle('Heading', parent=styles['Normal'], fontName='Helvetica-Bold',
-                                      fontSize=9, leading=11, alignment=TA_JUSTIFY, spaceAfter=9)
-        gdpr_style = ParagraphStyle('GDPR', parent=styles['Normal'], fontName='Helvetica-Oblique',
-                                   fontSize=8, leading=10, alignment=TA_JUSTIFY)
+        notice_style = ParagraphStyle(
+            'Notice',
+            parent=styles['Normal'],
+            fontName='Helvetica-Bold',
+            textColor=colors.red,
+            fontSize=9,
+            leading=12.5,
+            alignment=TA_JUSTIFY,
+            spaceAfter=14
+        )
+
+        normal_style = ParagraphStyle(
+            'Normal',
+            parent=styles['Normal'],
+            fontName='Helvetica',
+            fontSize=9,
+            leading=12.5,
+            alignment=TA_JUSTIFY,
+            spaceAfter=8
+        )
+
+        gdpr_style = ParagraphStyle(
+            'GDPR',
+            parent=styles['Normal'],
+            fontName='Helvetica-Oblique',
+            fontSize=8,
+            leading=11,
+            alignment=TA_JUSTIFY,
+            spaceAfter=8
+        )
 
         story = []
 
-        notice_txt = "NOTICE: Unless otherwise agreed in writing by Welojets and the Customer, the flight will be 100% confirmed only upon simultaneous receipt of payment (must be credited to our bank account to be considered paid) and a signed contract. A signed contract alone does not guarantee the flight or the availability of the aircraft."
-        story.append(Paragraph(notice_txt, notice_style))
-        story.append(Spacer(1, 0.3*inch))
+        if self.lang == 'es':
+            notice_text = (
+                "<b><font color='red'>AVISO:</font></b> A menos que se acuerde lo contrario por escrito entre Welojets y el Cliente, "
+                "el vuelo se confirmará al 100% únicamente previa la recepción simultánea del pago "
+                "(debe estar acreditado en nuestra cuenta bancaria para considerarse pagado) y un contrato firmado. "
+                "Un contrato firmado solo no garantiza el vuelo ni la disponibilidad de la aeronave."
+            )
+        else:
+            notice_text = (
+                "<b><font color='red'>NOTICE:</font></b> Unless otherwise agreed in writing by Welojets and the Customer, "
+                "the flight will be 100% confirmed only upon simultaneous receipt of payment "
+                "(must be credited to our bank account to be considered paid) and a signed contract. "
+                "A signed contract alone does not guarantee the flight or the availability of the aircraft."
+            )
 
-        for line in self.terms_text.split('\n'):
-            line = line.strip()
-            if not line:
-                story.append(Spacer(1, 0.08*inch))
-            elif line.isupper() and len(line) < 50:
-                story.append(Paragraph(line, heading_style))
-            else:
-                story.append(Paragraph(line, normal_style))
-
-        story.append(PageBreak())
-
-        whereas = "WHEREAS: Client desires that Welojets act as Client's agent in arranging air transportation to be furnished to Client by one or more licensed air carriers (hereinafter referred to as \"Carrier\") under applicable regulations of the United States Federal Aviation Administration (FAA) and Department of Transportation (DOT) and/or EASA and/or equivalent foreign aeronautical authorities. For scheduled service, once a Client has agreed to the terms herein and paid for a flight, Welojets shall be authorized to purchase the flight from Carrier on Client's behalf (inclusive of all members of Client's party) and this agreement shall be binding as to each flight arranged by Welojets. For charter flights, Welojets will present a quote and a photograph of the type of aircraft to be used for the Client's flights. Once Client has confirmed his/her/its acceptance of a charter itinerary and price quote provided by Welojets, Welojets shall be authorized, as Client's agent, to enter into a charter contract with Carrier in the name and on the behalf of Client. Carriers are obligated to operate Flights in accordance with applicable EASA or U.S. or foreign laws, rules and regulations, and Carrier will have exclusive operational control of the aircraft at all times. CLIENT ACKNOWLEDGES AND AGREES THAT WELOJETS ACTS ONLY AS AN AGENT OF CLIENT FOR THE ARRANGEMENT OF AIR TRANSPORTATION AS DESCRIBED HEREIN, AND THAT WELOJETS DOES NOT OWN OR OPERATE ANY AIRCRAFT. This Agreement shall remain in full force for each flight arranged by Welojets until the Agreement is cancelled in writing by either party (term expires 10 days after the service/flight(s) are completed). This Agreement will be supplemented for each specific charter flight (or series of flights) by a separate \"Charter Quote\", which will include the flight details, pricing, and other applicable information and payment confirmation."
-        story.append(Paragraph(whereas, normal_style))
+        story.append(Paragraph(notice_text, normal_style))
         story.append(Spacer(1, 0.2*inch))
 
-        gdpr = "We inform you, as provided in the GDPR and the LOPDGDD, that WELOJETS AIR MOBILITY, S.L. collects and processes your personal data, applying the technical and organizational measures that guarantee their confidentiality, for the purpose of managing the hiring and services provided in accordance with the relationship that links us. For these purposes, you give your consent and authorization for this processing. We will retain your personal data collected for the time necessary to manage the relationship that links us. You may exercise your rights of access, rectification, deletion, limitation, portability, and opposition by contacting the Controller at Conde de Aranda nº10 piso 1 derecha, Madrid, 28001, Madrid, or by sending an email to fly@welojets.com."
-        story.append(Paragraph(gdpr, gdpr_style))
+        for line in text.split('\n'):
+            if line.strip():
+                story.append(Paragraph(line.strip(), normal_style))
+            else:
+                story.append(Spacer(1, 0.1*inch))
+
+        story.append(Spacer(1, 0.3*inch))
+
+        if self.lang == 'es':
+            whereas_text = (
+                "<b>CONSIDERANDO:</b> El Cliente desea que Welojets actúe como su agente en la "
+                "contratación de servicios de transporte aéreo proporcionados por uno o más transportistas "
+                "aéreos autorizados conforme a las regulaciones aplicables de la FAA, DOT, EASA y/u otras "
+                "autoridades aeronáuticas equivalentes. Para vuelos charter, una vez que el Cliente ha "
+                "confirmado su aceptación de la cotización presentada por Welojets, Welojets estará autorizado, "
+                "como agente del Cliente, para celebrar un contrato charter con el transportista en nombre del Cliente. "
+                "Los transportistas operarán los vuelos de conformidad con las leyes y regulaciones aplicables. "
+                "EL CLIENTE RECONOCE Y ACEPTA QUE WELOJETS ACTÚA ÚNICAMENTE COMO AGENTE DEL CLIENTE PARA LA CONTRATACIÓN "
+                "DE SERVICIOS DE TRANSPORTE AÉREO, Y QUE WELOJETS NO POSEE NI OPERA AERONAVE ALGUNA."
+            )
+        else:
+            whereas_text = (
+                "<b>WHEREAS:</b> Client desires that Welojets act as Client's agent in arranging air transportation "
+                "to be furnished by one or more licensed air carriers under applicable FAA, DOT, EASA and equivalent regulations. "
+                "For charter flights, once Client has confirmed acceptance of Welojets' quote, Welojets shall be authorized "
+                "to enter into a charter contract with Carrier on Client's behalf. Carriers shall operate flights in accordance "
+                "with applicable laws and regulations. CLIENT ACKNOWLEDGES AND AGREES THAT WELOJETS ACTS ONLY AS AN AGENT "
+                "OF CLIENT FOR AIR TRANSPORTATION ARRANGEMENT, AND THAT WELOJETS DOES NOT OWN OR OPERATE ANY AIRCRAFT."
+            )
+
+        story.append(Paragraph(whereas_text, normal_style))
+        story.append(Spacer(1, 0.2*inch))
+
+        if self.lang == 'es':
+            gdpr_text = (
+                "De conformidad con la RGPD y LOPDGDD, informamos que WELOJETS AIR MOBILITY, S.L. recopila y trata sus datos personales, "
+                "aplicando las medidas técnicas y organizativas que garanticen su confidencialidad, con la finalidad de gestionar "
+                "la contratación de servicios. Puede ejercer sus derechos de acceso, rectificación, supresión, limitación, portabilidad "
+                "y oposición contactando con el responsable en Conde de Aranda nº10 piso 1, Madrid, 28001, o enviando un correo a fly@welojets.com."
+            )
+        else:
+            gdpr_text = (
+                "We inform you, as provided in the GDPR, that WELOJETS AIR MOBILITY, S.L. collects and processes your personal data "
+                "with technical and organizational measures ensuring confidentiality for service management purposes. You may exercise "
+                "your rights by contacting Conde de Aranda nº10 piso 1, Madrid, 28001, or emailing fly@welojets.com."
+            )
+
+        story.append(Paragraph(gdpr_text, gdpr_style))
 
         doc.build(story, onFirstPage=self._add_header, onLaterPages=self._add_header)
         buffer.seek(0)
         return buffer
 
     def _add_header(self, canvas, doc):
+        """Agrega logo como encabezado - intenta base64 primero, fallback a archivo"""
         try:
-            # Usa logo en BASE64
-            logo_bytes = base64.b64decode(LOGO_BASE64)
-            img = Image(BytesIO(logo_bytes), width=1.2*inch, height=1.2*inch)
-            x = (letter[0] - 1.2*inch) / 2
-            y = letter[1] - 0.95*inch
-            img.drawOn(canvas, x, y)
-        except:
-            pass
+            if LOGO_BASE64:
+                # Usa logo desde base64
+                img_data = io.BytesIO(base64.b64decode(LOGO_BASE64))
+                img = Image(img_data, width=1.25*inch, height=1.25*inch)
+                img.hAlign = 'CENTER'
+                x = (letter[0] - 1.25*inch) / 2
+                y = letter[1] - 0.85*inch
+                img.drawOn(canvas, x, y)
+            else:
+                # Intenta archivo local si existe
+                logo_path = os.path.join(os.path.dirname(__file__), 'logo_welojets.png')
+                if os.path.exists(logo_path):
+                    img = Image(logo_path, width=1.25*inch, height=1.25*inch)
+                    img.hAlign = 'CENTER'
+                    x = (letter[0] - 1.25*inch) / 2
+                    y = letter[1] - 0.85*inch
+                    img.drawOn(canvas, x, y)
+        except Exception as e:
+            pass  # Si falla, continúa sin logo
 
-HTML = """<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>T&C Generator</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}.container{background:white;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.3);padding:40px;max-width:500px;width:100%}h1{color:#333;font-size:28px;text-align:center}label{display:block;color:#333;font-weight:600;margin:20px 0 10px}.upload-area{border:2px dashed #667eea;border-radius:8px;padding:30px;text-align:center;cursor:pointer;background:#f8f9ff}.upload-area:hover{border-color:#764ba2}#pdf-input{display:none}.file-name{color:#10b981;margin-top:8px;font-size:13px}.entity-group{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}.radio-option input{display:none}.radio-label{display:block;padding:12px;border:2px solid #e0e0e0;border-radius:6px;cursor:pointer;font-weight:500}.radio-option input:checked+.radio-label{border-color:#667eea;background:#f0f2ff;color:#667eea}button{width:100%;padding:14px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;border:none;border-radius:6px;font-size:16px;font-weight:600;cursor:pointer;margin-top:20px}.error{background:#fee;border-left:4px solid #f00;color:#c33;padding:12px;margin-top:12px;display:none}.error.show{display:block}</style></head><body><div class="container"><h1>T&C Generator</h1><form id="f" enctype="multipart/form-data"><label>Carga PDF</label><div class="upload-area" id="ua"><div style="font-size:32px">📄</div><div>Arrastra aquí</div></div><input type="file" id="pi" accept=".pdf" required><div class="file-name" id="fn"></div><label>Entidad</label><div class="entity-group"><div class="radio-option"><input type="radio" id="es" name="e" value="SL" checked><label for="es" class="radio-label">SL - Madrid</label></div><div class="radio-option"><input type="radio" id="el" name="e" value="LLC"><label for="el" class="radio-label">LLC - Florida</label></div></div><div class="error" id="em"></div><button type="submit">Generar PDF</button></form></div><script>const f=document.getElementById('f');const ua=document.getElementById('ua');const pi=document.getElementById('pi');const em=document.getElementById('em');ua.addEventListener('click',()=>pi.click());ua.addEventListener('drop',(e)=>{e.preventDefault();pi.files=e.dataTransfer.files;});pi.addEventListener('change',()=>{if(pi.files[0])document.getElementById('fn').textContent='✓ '+pi.files[0].name;});f.addEventListener('submit',async(e)=>{e.preventDefault();if(!pi.files[0]){em.textContent='❌ Selecciona un PDF';em.classList.add('show');return;}const d=new FormData();d.append('pdf',pi.files[0]);d.append('entity',document.querySelector('input[name="e"]:checked').value);try{const r=await fetch('/api/generate',{method:'POST',body:d});if(!r.ok){const err=await r.json();throw new Error(err.error||'Error')}const b=await r.blob();const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download=`TC_${new Date().toISOString().slice(0,10)}.pdf`;a.click();}catch(e){em.textContent='❌ '+e.message;em.classList.add('show');}});</script></body></html>"""
 
 @app.route('/')
 def index():
-    return HTML
+    return render_template('index.html')
 
-@app.route('/api/generate', methods=['POST'])
-def generate():
+
+@app.route('/api/process-pdf-download', methods=['POST'])
+def process_pdf():
+    """Procesa PDF y retorna descarga"""
     try:
         if 'pdf' not in request.files:
-            return jsonify({'error': 'No PDF file'}), 400
-        
+            return jsonify({'error': 'No PDF provided'}), 400
+
         pdf_file = request.files['pdf']
         entity = request.form.get('entity', 'SL')
+
+        if not pdf_file or pdf_file.filename == '':
+            return jsonify({'error': 'Invalid file'}), 400
+
         pdf_bytes = pdf_file.read()
-        
-        extractor = TCExtractor(pdf_bytes)
-        raw_terms = extractor.extract_terms()
-        clean_terms = extractor.clean_and_fix(raw_terms, entity)
-        
-        generator = TCGenerator(clean_terms, entity)
-        pdf_buffer = generator.generate_pdf()
-        
-        return send_file(pdf_buffer, mimetype='application/pdf', as_attachment=True,
-                        download_name=f'TC_Modified_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
-    
+
+        processor = TCProcessor()
+        tc_text = processor.extract_tc_from_pdf(pdf_bytes)
+        transformed_text = processor.transform_text(tc_text, entity)
+        pdf_buffer = processor.generate_pdf(transformed_text, entity)
+
+        return send_file(
+            pdf_buffer,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f'TC_Welojets_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf'
+        )
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT, debug=False)
+    PORT = int(os.environ.get('PORT', 5000))
+    DEBUG = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=PORT, debug=DEBUG)
