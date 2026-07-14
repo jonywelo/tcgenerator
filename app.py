@@ -29,14 +29,14 @@ class TCExtractor:
                 full_text += (page.extract_text() or "") + "\n"
         
         if "TERMS & CONDITIONS" not in full_text:
-            raise Exception("No TERMS & CONDITIONS found in PDF")
+            raise Exception("No TERMS & CONDITIONS found")
         
         # Extrae desde TERMS & CONDITIONS
         start = full_text.find("TERMS & CONDITIONS")
         extracted = full_text[start:]
         
-        # Busca el final
-        end_markers = ["By signing this contract", "Both parties agree", "Date, Signature"]
+        # Busca el final (antes de firma o "By signing")
+        end_markers = ["By signing this contract", "By signing this agreement", "Both parties agree", "Date, Signature"]
         for marker in end_markers:
             if marker in extracted:
                 end = extracted.find(marker)
@@ -46,48 +46,60 @@ class TCExtractor:
         return extracted.strip()
 
     def clean_and_fix(self, text, entity):
-        """Limpia el texto y aplica transformaciones"""
+        """Limpia GENÉRICAMENTE - funciona para cualquier operador"""
         
-        # 1. Elimina líneas completas con info del operador
+        # 1. Elimina SOLO líneas que son claramente info de contacto/banco
         lines = text.split('\n')
         cleaned = []
         
-        skip_keywords = ['Industriestraße', 'Geschäftsführer', 'Deutsche Bank', 'IBAN', 'BIC', 
-                        'SWIFT', 'HRB', 'Amtsgericht', 'Josephine', 'Marko', 'Schkeuditz',
-                        'VAT:', 'sales@', 'www.', 'Charter Agreement', 'Thank you', 'Aircraft:',
-                        'Prepared for:', 'Contact Person:', 'Date ETD', 'Price', 'Total Price']
-        
         for line in lines:
-            if any(kw in line for kw in skip_keywords):
+            # Elimina líneas que son SOLO contacto del operador
+            line_lower = line.lower()
+            
+            # Si la línea contiene SOLO info de banco/registro/contacto, elimina
+            if any(x in line_lower for x in ['iban:', 'bic:', 'swift:', 'hrb', 'amtsgericht', 
+                                               'geschäftsführer', 'industriestraße', 'schkeuditz']):
                 continue
-            if len(line.strip()) < 2:
+            
+            # Si es una línea que dice "Company:", "Prepared for:", "Contact Person:", etc. - elimina
+            if re.match(r'^(Company|Prepared for|Contact Person|Aircraft|Date ETD|Price|Total Price|VAT):', line):
                 continue
+            
+            # Si es una línea que dice "Phone:", "E-Mail:", "Web:" y nada más de valor - elimina
+            if re.match(r'^(Phone|E-Mail|Web|Fax|Tel):\s*$', line):
+                continue
+            
             cleaned.append(line)
         
         text = '\n'.join(cleaned)
         
-        # 2. Limpia URLs
-        text = re.sub(r'https?://\S+', '', text)
-        
-        # 3. Limpia emails no-Welojets
+        # 2. Elimina emails no-Welojets (en líneas)
         text = re.sub(r'[a-zA-Z0-9._%+-]+@(?!welojets)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
         
-        # 4. Cancellation fees - MÁXIMO 100%
+        # 3. Elimina URLs
+        text = re.sub(r'https?://\S+', '', text)
+        text = re.sub(r'www\.\S+', '', text)
+        
+        # 4. Elimina líneas que son SOLO VAT/IBAN/números de banco
+        text = re.sub(r'VAT:?\s*[A-Z]{2}\s*\d+[\s\d]*\n', '\n', text)
+        text = re.sub(r'(IBAN|BIC|SWIFT):\s*[A-Z0-9]+\n', '\n', text)
+        
+        # 5. Cancellation fees - MÁXIMO 100%
         def fix_cancel(m):
             pct = int(m.group(1))
-            new_pct = min(pct * 2, 100)  # MÁXIMO 100%
+            new_pct = min(pct * 2, 100)
             return f"{new_pct}%"
         
         text = re.sub(r'(\d+)%\s+(?:of|after|if|for)', fix_cancel, text, flags=re.IGNORECASE)
         
-        # 5. Credit card fee
+        # 6. Credit card fee
         text = re.sub(r'credit\s+card\s+fee[:\s]+\d+%', 'credit card fee: 5%', text, flags=re.IGNORECASE)
         
-        # 6. Governing Law
+        # 7. Governing Law
         repl = 'Madrid, Spain' if entity == 'SL' else 'Florida, USA'
         text = re.sub(r'(?:governing|applicable)\s+law[:\s]*[^\n.]*', f'Governing Law: {repl}', text, flags=re.IGNORECASE)
         
-        # 7. Limpia espacios múltiples
+        # 8. Limpia espacios múltiples
         text = re.sub(r'\n\s*\n+', '\n\n', text)
         text = re.sub(r' {2,}', ' ', text)
         
@@ -169,20 +181,16 @@ def index():
 def generate():
     try:
         if 'pdf' not in request.files:
-            return jsonify({'error': 'No PDF file provided'}), 400
+            return jsonify({'error': 'No PDF file'}), 400
         
         pdf_file = request.files['pdf']
         entity = request.form.get('entity', 'SL')
         pdf_bytes = pdf_file.read()
         
-        # Extrae términos
         extractor = TCExtractor(pdf_bytes)
         raw_terms = extractor.extract_terms()
-        
-        # Limpia y transforma
         clean_terms = extractor.clean_and_fix(raw_terms, entity)
         
-        # Genera PDF
         generator = TCGenerator(clean_terms, entity)
         pdf_buffer = generator.generate_pdf()
         
