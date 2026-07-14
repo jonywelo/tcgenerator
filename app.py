@@ -1,5 +1,5 @@
 """
-T&C Generator - Flask Application v2
+T&C Generator - Flask Application v2.1
 Procesador de Términos y Condiciones para contratos de operadores de aviación
 """
 
@@ -22,7 +22,7 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # Logo Welojets embebido como base64
-LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAARAAAABhCAYAAAAeA/7FAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAABckSURBVHhe7d15VFTn+Qfw7zAwIPu+jrIMIouKC7KYxKNgkxSpbdpGSdxQ1CxNpTVibINKXFpNVZqQNPWkPdU0CiektvFU2tIj1miIAaMIguwGMGwi2wiyzvv7o3AP9x2QmQvK0N/zOec9h/u+z70XBnjmfd/7zr0yxhgDIYRIYMRXEEKIriiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIowX+kq9E0wFZiZAAAAABJRU5ErkJggg=="
+LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAARAAAABhCAYAAAAeA/7FAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAABckSURBVHhe7d15VFTn+Qfw7zAwIPu+jrIMIouKC7KYxKNgkxSpbdpGSdxQ1CxNpTVibINKXFpNVZqQNPWkPdU0CiektvFU2tIj1miIAaMIguwGMGwi2wiyzvv7o3AP9x2QmQvK0N/zOec9h/u+z70XBnjmfd/7zr0yxhgDIYRIYMRXEEKIriiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIowX+kq9E0wFZiZAAAAABJRU5ErkJggg=="
 
 def load_logo():
     """Intenta cargar logo desde archivo como fallback"""
@@ -54,7 +54,7 @@ class TCProcessor:
         return self.lang
 
     def extract_tc_from_pdf(self, pdf_bytes):
-        """Extrae Terms and Conditions del PDF"""
+        """Extrae Terms and Conditions del PDF con fallback robusto"""
         try:
             pdf_file = io.BytesIO(pdf_bytes)
             text_content = ""
@@ -68,7 +68,7 @@ class TCProcessor:
             patterns = [
                 r'(?:terms?\s+and\s+conditions?|t\s*&\s*c)',
                 r'(?:términos?\s+y\s+condiciones?)',
-                r'(?:terms?|conditions?|términos?|condiciones?)',
+                r'notice|aviso|preamble|preámbulo',
             ]
 
             tc_start_idx = -1
@@ -78,8 +78,19 @@ class TCProcessor:
                     tc_start_idx = match.start()
                     break
 
+            # Si encontró patrón, extrae desde ese punto
             if tc_start_idx > 0:
                 text_content = text_content[tc_start_idx:]
+
+            # Si el texto está vacío después de la extracción, retorna TODO
+            # (fallback para PDFs que no tienen los patrones esperados)
+            if not text_content.strip():
+                pdf_file.seek(0)
+                with pdfplumber.open(pdf_file) as pdf:
+                    text_content = ""
+                    for page in pdf.pages:
+                        text_content += page.extract_text() or ""
+                        text_content += "\n"
 
             return text_content
         except Exception as e:
