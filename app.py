@@ -6,7 +6,7 @@ Procesador de Términos y Condiciones para contratos de operadores de aviación
 import os
 import io
 import base64
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, request, send_file, jsonify
 import pdfplumber
 import re
 from reportlab.lib.pagesizes import letter
@@ -22,7 +22,7 @@ app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
 # Logo Welojets embebido como base64
-LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAARAAAABhCAYAAAAeA/7FAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAABckSURBVHhe7d15VFTn+Qfw7zAwIPu+jrIMIouKC7KYxKNgkxSpbdpGSdxQ1CxNpTVibINKXFpNVZqQNPWkPdU0CiektvFU2tIj1miIAaMIguwGMGwi2wiyzvv7o3AP9x2QmQvK0N/zOec9h/u+z70XBnjmfd/7zr0yxhgDIYRIYMRXEEKIriiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIowX+kq9E0wFZiZAAAAABJRU5ErkJggg=="
+LOGO_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAARAAAABhCAYAAAAeA/7FAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAAEnQAABJ0Ad5mH3gAABckSURBVHhe7d15VFTn+Qfw7zAwIPu+jrIMIouKC7KYxKNgkxSpbdpGSdxQ1CxNpTVibINKXFpNVZqQNPWkPdU0CiektvFU2tIj1miIAaMIguwGMGwi2wiyzvv7o3AP9x2QmQvK0N/zOec9h/u+z70XBnjmfd/7zr0yxhgDIYRIYMRXEEKIriiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIkowRCCJGMEgghRDJKIIQQySiBEEIowX+kq9E0wFZiZAAAAABJRU5ErkJggg=="
 
 def load_logo():
     """Intenta cargar logo desde archivo como fallback"""
@@ -356,7 +356,256 @@ class TCProcessor:
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return '''<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>T&C Generator - Welojets</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+            text-align: center;
+        }
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        .form-group {
+            margin-bottom: 24px;
+        }
+        label {
+            display: block;
+            color: #333;
+            font-weight: 600;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .upload-area {
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9ff;
+        }
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: #f0f2ff;
+        }
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: #e9ecff;
+            transform: scale(1.02);
+        }
+        .upload-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+        .upload-text {
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .upload-subtext {
+            color: #999;
+            font-size: 12px;
+        }
+        #pdfInput {
+            display: none;
+        }
+        .file-name {
+            color: #10b981;
+            margin-top: 8px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .entity-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .radio-option {
+            position: relative;
+        }
+        .radio-option input {
+            display: none;
+        }
+        .radio-label {
+            display: block;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 13px;
+        }
+        .radio-option input:checked + .radio-label {
+            border-color: #667eea;
+            background: #f0f2ff;
+            color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            font-size: 14px;
+        }
+        button:hover:not(:disabled) {
+            transform: scale(1.02);
+        }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .error {
+            color: #ef4444;
+            margin-top: 10px;
+            padding: 12px;
+            background: #fee2e2;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>T&C Generator</h1>
+        <p class="subtitle">Procesador de Términos y Condiciones</p>
+
+        <div class="form-group">
+            <label>Contrato PDF del Operador</label>
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📄</div>
+                <div class="upload-text">Arrastra tu PDF aquí o haz clic</div>
+                <div class="upload-subtext">Máximo 50MB</div>
+                <input type="file" id="pdfInput" accept=".pdf">
+            </div>
+            <div class="file-name" id="fileName"></div>
+        </div>
+
+        <div class="form-group">
+            <label>Tipo de Entidad</label>
+            <div class="entity-group">
+                <div class="radio-option">
+                    <input type="radio" id="sl" name="entity" value="SL" checked>
+                    <label for="sl" class="radio-label">SL (Madrid)</label>
+                </div>
+                <div class="radio-option">
+                    <input type="radio" id="llc" name="entity" value="LLC">
+                    <label for="llc" class="radio-label">LLC (Florida)</label>
+                </div>
+            </div>
+        </div>
+
+        <button id="processBtn" disabled>Procesar PDF</button>
+        <div id="errorMsg"></div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const pdfInput = document.getElementById('pdfInput');
+        const fileName = document.getElementById('fileName');
+        const processBtn = document.getElementById('processBtn');
+        const errorMsg = document.getElementById('errorMsg');
+
+        uploadArea.addEventListener('click', () => pdfInput.click());
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            pdfInput.files = e.dataTransfer.files;
+            handleFileSelect();
+        });
+
+        pdfInput.addEventListener('change', handleFileSelect);
+
+        function handleFileSelect() {
+            if (pdfInput.files.length > 0) {
+                fileName.textContent = '✓ ' + pdfInput.files[0].name;
+                processBtn.disabled = false;
+            }
+        }
+
+        processBtn.addEventListener('click', async () => {
+            if (!pdfInput.files.length) return;
+
+            const formData = new FormData();
+            formData.append('pdf', pdfInput.files[0]);
+            formData.append('entity', document.querySelector('input[name="entity"]:checked').value);
+
+            processBtn.disabled = true;
+            processBtn.textContent = 'Procesando...';
+            errorMsg.innerHTML = '';
+
+            try {
+                const response = await fetch('/api/process-pdf-download', {
+                    method: 'POST',
+                    body: formData
+                });
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'TC_Welojets_' + new Date().toISOString().split('T')[0] + '.pdf';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                } else {
+                    const error = await response.json();
+                    errorMsg.innerHTML = '<div class="error">Error: ' + (error.error || 'Error desconocido') + '</div>';
+                }
+            } catch (err) {
+                errorMsg.innerHTML = '<div class="error">Error: ' + err.message + '</div>';
+            }
+
+            processBtn.disabled = false;
+            processBtn.textContent = 'Procesar PDF';
+        });
+    </script>
+</body>
+</html>'''
 
 
 @app.route('/api/process-pdf-download', methods=['POST'])
