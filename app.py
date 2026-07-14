@@ -20,7 +20,7 @@ class TCExtractor:
         self.pdf_bytes = pdf_bytes
 
     def extract_terms(self):
-        """Extrae TERMS & CONDITIONS del PDF"""
+        """Extrae términos con búsqueda flexible"""
         pdf_file = io.BytesIO(self.pdf_bytes)
         
         with pdfplumber.open(pdf_file) as pdf:
@@ -28,19 +28,42 @@ class TCExtractor:
             for page in pdf.pages:
                 full_text += (page.extract_text() or "") + "\n"
         
-        if "TERMS & CONDITIONS" not in full_text:
-            raise Exception("No TERMS & CONDITIONS found")
+        # Busca múltiples patrones FLEXIBLES
+        patterns = [
+            r'The\s+Terms?\s+(?:and|&)\s+Conditions?',
+            r'TERMS?\s*(?:and|&)\s*CONDITIONS?',
+            r'^\s*TERMS?\s*$',
+            r'GENERAL\s+CONDITIONS?',
+            r'CONDITIONS?\s+OF\s+CONTRACT',
+            r'CONTRACT\s+TERMS?',
+            r'Included\s+Services',
+            r'Booking:?',
+        ]
         
-        # Extrae desde TERMS & CONDITIONS
-        start = full_text.find("TERMS & CONDITIONS")
-        extracted = full_text[start:]
+        start_pos = None
+        for pattern in patterns:
+            match = re.search(pattern, full_text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                start_pos = match.start()
+                break
         
-        # Busca el final (antes de firma o "By signing")
-        end_markers = ["By signing this contract", "By signing this agreement", "Both parties agree", "Date, Signature"]
+        if start_pos is None:
+            raise Exception("Cannot find T&C section. Please ensure the PDF contains a terms section.")
+        
+        extracted = full_text[start_pos:]
+        
+        # Busca el final (antes de firma)
+        end_markers = [
+            r'By\s+signing\s+this',
+            r'Date[,:]?\s+Signature',
+            r'Both\s+parties\s+agree',
+            r'SIGNATURE',
+        ]
+        
         for marker in end_markers:
-            if marker in extracted:
-                end = extracted.find(marker)
-                extracted = extracted[:end]
+            match = re.search(marker, extracted, re.IGNORECASE)
+            if match:
+                extracted = extracted[:match.start()]
                 break
         
         return extracted.strip()
@@ -48,43 +71,42 @@ class TCExtractor:
     def clean_and_fix(self, text, entity):
         """Limpia GENÉRICAMENTE - funciona para cualquier operador"""
         
-        # 1. Elimina SOLO líneas que son claramente info de contacto/banco
         lines = text.split('\n')
         cleaned = []
         
         for line in lines:
-            # Elimina líneas que son SOLO contacto del operador
             line_lower = line.lower()
             
-            # Si la línea contiene SOLO info de banco/registro/contacto, elimina
+            # Elimina líneas que son SOLO info de banco/registro
             if any(x in line_lower for x in ['iban:', 'bic:', 'swift:', 'hrb', 'amtsgericht', 
-                                               'geschäftsführer', 'industriestraße', 'schkeuditz']):
+                                               'geschäftsführer', 'industriestraße', 'schkeuditz',
+                                               'vat:', 'tax id:', 'registration', 'company registration']):
                 continue
             
-            # Si es una línea que dice "Company:", "Prepared for:", "Contact Person:", etc. - elimina
-            if re.match(r'^(Company|Prepared for|Contact Person|Aircraft|Date ETD|Price|Total Price|VAT):', line):
+            # Elimina líneas de campos de forma
+            if re.match(r'^(Company|Prepared\s+for|Contact\s+Person|Aircraft|Date\s+ETD|Price|Total\s+Price):', line):
                 continue
             
-            # Si es una línea que dice "Phone:", "E-Mail:", "Web:" y nada más de valor - elimina
-            if re.match(r'^(Phone|E-Mail|Web|Fax|Tel):\s*$', line):
+            # Elimina líneas de solo contacto
+            if re.match(r'^(Phone|E-Mail|Email|Web|Fax|Tel):\s*$', line):
                 continue
             
             cleaned.append(line)
         
         text = '\n'.join(cleaned)
         
-        # 2. Elimina emails no-Welojets (en líneas)
+        # Elimina emails no-Welojets
         text = re.sub(r'[a-zA-Z0-9._%+-]+@(?!welojets)[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', '', text)
         
-        # 3. Elimina URLs
+        # Elimina URLs
         text = re.sub(r'https?://\S+', '', text)
         text = re.sub(r'www\.\S+', '', text)
         
-        # 4. Elimina líneas que son SOLO VAT/IBAN/números de banco
-        text = re.sub(r'VAT:?\s*[A-Z]{2}\s*\d+[\s\d]*\n', '\n', text)
-        text = re.sub(r'(IBAN|BIC|SWIFT):\s*[A-Z0-9]+\n', '\n', text)
+        # Elimina números de banco
+        text = re.sub(r'VAT[:\s]*[A-Z]{2}\s*\d+[\s\d]*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'(IBAN|BIC|SWIFT)[:\s]*[A-Z0-9]+', '', text, flags=re.IGNORECASE)
         
-        # 5. Cancellation fees - MÁXIMO 100%
+        # Cancellation fees - MÁXIMO 100%
         def fix_cancel(m):
             pct = int(m.group(1))
             new_pct = min(pct * 2, 100)
@@ -92,14 +114,14 @@ class TCExtractor:
         
         text = re.sub(r'(\d+)%\s+(?:of|after|if|for)', fix_cancel, text, flags=re.IGNORECASE)
         
-        # 6. Credit card fee
+        # Credit card fee
         text = re.sub(r'credit\s+card\s+fee[:\s]+\d+%', 'credit card fee: 5%', text, flags=re.IGNORECASE)
         
-        # 7. Governing Law
+        # Governing Law
         repl = 'Madrid, Spain' if entity == 'SL' else 'Florida, USA'
         text = re.sub(r'(?:governing|applicable)\s+law[:\s]*[^\n.]*', f'Governing Law: {repl}', text, flags=re.IGNORECASE)
         
-        # 8. Limpia espacios múltiples
+        # Limpia espacios
         text = re.sub(r'\n\s*\n+', '\n\n', text)
         text = re.sub(r' {2,}', ' ', text)
         
